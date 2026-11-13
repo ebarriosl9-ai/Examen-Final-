@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HelpDesk EDU - Activos atendidos</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 760px; margin: 2rem auto; padding: 0 1rem; color: #1b1f24; }
+  h1 { font-size: 1.4rem; }
+  label { display: block; font-weight: 600; margin-top: .8rem; }
+  input, select, button { font: inherit; padding: .5rem; margin-top: .25rem; }
+  input, select { width: 100%; box-sizing: border-box; }
+  button { cursor: pointer; background: #1f6feb; color: #fff; border: 0; border-radius: 6px; padding: .55rem 1rem; margin-top: 1rem; }
+  .msg { margin-top: 1rem; padding: .6rem .8rem; border-radius: 6px; }
+  .ok { background: #dafbe1; color: #116329; }
+  .err { background: #ffebe9; color: #82071e; }
+  table { width: 100%; border-collapse: collapse; margin-top: 1rem; }
+  th, td { text-align: left; padding: .45rem; border-bottom: 1px solid #d0d7de; }
+  .row { display: flex; gap: 1rem; } .row > div { flex: 1; }
+  @media (max-width: 600px) { .row { flex-direction: column; gap: 0; } }
+</style>
+</head>
+<body>
+<h1>Activos atendidos del ticket</h1>
+
+<div class="row">
+  <div>
+    <label for="usuario">Usuario</label>
+    <select id="usuario"></select>
+  </div>
+  <div>
+    <label for="ticket">Ticket</label>
+    <select id="ticket"></select>
+  </div>
+</div>
+
+<section id="seccion-activos">
+  <form id="form" novalidate>
+    <label for="codigo">Código del activo</label>
+    <input id="codigo" maxlength="60" placeholder="Ej. LAP-0001" required>
+    <label for="descripcion">Descripción del equipo</label>
+    <input id="descripcion" maxlength="255" placeholder="Ej. Laptop Dell Latitude">
+    <button type="submit">Registrar activo</button>
+  </form>
+
+  <div id="mensaje" role="alert" aria-live="polite"></div>
+
+  <table>
+    <thead><tr><th>Código</th><th>Descripción</th><th>Registrado</th></tr></thead>
+    <tbody id="lista"></tbody>
+  </table>
+</section>
+
+<p id="sin-acceso" class="msg err" hidden>Esta sección es solo para el personal de soporte.</p>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const PERSONAL = ["tecnico", "supervisor", "administrador"];
+let usuarios = [];
+
+function token() { return "Bearer token-" + $("usuario").value; }
+function rolActual() { return usuarios.find(u => String(u.id) === $("usuario").value)?.role; }
+
+function mostrar(texto, ok) {
+  $("mensaje").innerHTML = "";
+  const div = document.createElement("div");
+  div.className = "msg " + (ok ? "ok" : "err");
+  div.textContent = texto;
+  $("mensaje").appendChild(div);
+}
+
+async function api(url, opts = {}) {
+  const resp = await fetch(url, {
+    ...opts,
+    headers: { "Content-Type": "application/json", "Authorization": token() },
+  });
+  let cuerpo = null;
+  try { cuerpo = await resp.json(); } catch (_) {}
+  if (!resp.ok) {
+    let detalle = cuerpo?.detail ?? "Error inesperado.";
+    if (Array.isArray(detalle)) detalle = detalle.map(d => d.msg).join("; ");
+    throw new Error(detalle);
+  }
+  return cuerpo;
+}
+
+async function cargarLista() {
+  const esPersonal = PERSONAL.includes(rolActual());
+  $("seccion-activos").hidden = !esPersonal;
+  $("sin-acceso").hidden = esPersonal;
+  if (!esPersonal) return;
+  try {
+    const activos = await api(`/api/tickets/${$("ticket").value}/assets`);
+    $("lista").innerHTML = "";
+    for (const a of activos) {
+      const tr = document.createElement("tr");
+      for (const v of [a.codigo, a.descripcion || "-", new Date(a.creado_en).toLocaleString()]) {
+        const td = document.createElement("td");
+        td.textContent = v;
+        tr.appendChild(td);
+      }
+      $("lista").appendChild(tr);
+    }
+  } catch (e) { mostrar(e.message, false); }
+}
+
+$("form").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  try {
+    const a = await api(`/api/tickets/${$("ticket").value}/assets`, {
+      method: "POST",
+      body: JSON.stringify({ codigo: $("codigo").value, descripcion: $("descripcion").value }),
+    });
+    mostrar(`Activo ${a.codigo} registrado correctamente.`, true);
+    $("codigo").value = ""; $("descripcion").value = "";
+    await cargarLista();
+  } catch (e) { mostrar(e.message, false); }
+});
+
+$("usuario").addEventListener("change", () => { $("mensaje").innerHTML = ""; cargarTickets(); });
+$("ticket").addEventListener("change", () => { $("mensaje").innerHTML = ""; cargarLista(); });
+
+async function cargarTickets() {
+  const tickets = await api("/api/tickets");
+  const actual = $("ticket").value;
+  $("ticket").innerHTML = tickets.map(t => `<option value="${t.id}">#${t.id} - ${t.titulo}</option>`).join("");
+  if (actual) $("ticket").value = actual;
+  await cargarLista();
+}
+
+(async () => {
+  usuarios = await (await fetch("/api/users")).json();
+  $("usuario").innerHTML = usuarios.map(u => `<option value="${u.id}">${u.username} (${u.role})</option>`).join("");
+  $("usuario").value = "2";
+  await cargarTickets();
+})();
+</script>
+</body>
+</html>
